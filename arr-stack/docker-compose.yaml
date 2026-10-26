@@ -1,0 +1,232 @@
+# Arr stack: requests -> Seerr -> Sonarr/Radarr -> Prowlarr -> qBittorrent/SABnzbd (via VPN) -> Jellyfin
+# Layout follows TRaSH Guides: one /data mount everywhere so hardlinks / instant moves work.
+#   /data/torrents/{movies,tv}   /data/usenet/{incomplete,complete/{movies,tv}}   /data/media/{movies,tv}
+
+name: arrstack
+
+networks:
+  arr:
+    name: arrstack
+    ipam:
+      config:
+        - subnet: ${DOCKER_SUBNET}
+
+x-arr: &arr
+  restart: unless-stopped
+  networks: [arr]
+  volumes:
+    - ${DATA_ROOT}:/data
+
+services:
+  # ---- VPN: qBittorrent + SABnzbd share this network namespace (no VPN = no traffic) ----
+  gluetun:
+    image: qmcgaw/gluetun:latest
+    container_name: gluetun
+    restart: unless-stopped
+    cap_add: [NET_ADMIN]
+    devices: [/dev/net/tun:/dev/net/tun]
+    networks: [arr]
+    ports:
+      - ${QBIT_WEBUI_PORT}:${QBIT_WEBUI_PORT}   # qBittorrent
+      - ${SAB_WEBUI_PORT}:8080                  # SABnzbd
+    volumes:
+      - ${CONFIG_ROOT}/gluetun:/gluetun
+    environment:
+      - TZ=${TIMEZONE}
+      - VPN_SERVICE_PROVIDER=${VPN_SERVICE_PROVIDER}
+      - VPN_TYPE=${VPN_TYPE}
+      - OPENVPN_USER=${VPN_USERNAME}
+      - OPENVPN_PASSWORD=${VPN_PASSWORD}
+      - WIREGUARD_PRIVATE_KEY=${WIREGUARD_PRIVATE_KEY}
+      - WIREGUARD_ADDRESSES=${WIREGUARD_ADDRESSES}
+      - SERVER_COUNTRIES=${SERVER_COUNTRIES}
+      # let the arr containers + your LAN reach the download clients through the tunnel
+      - FIREWALL_OUTBOUND_SUBNETS=${LOCAL_SUBNET},${DOCKER_SUBNET}
+      - FIREWALL_INPUT_PORTS=${QBIT_WEBUI_PORT},8080
+
+  # ---- Download clients ----
+  qbittorrent:
+    image: lscr.io/linuxserver/qbittorrent:latest
+    container_name: qbittorrent
+    restart: unless-stopped
+    network_mode: service:gluetun        # never change: must stay behind the VPN
+    depends_on:
+      gluetun: {condition: service_healthy, restart: true}
+    volumes:
+      - ${DATA_ROOT}:/data
+      - ${CONFIG_ROOT}/qbittorrent:/config
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - UMASK=${UMASK}
+      - TZ=${TIMEZONE}
+      - WEBUI_PORT=${QBIT_WEBUI_PORT}
+      - TORRENTING_PORT=6881
+
+  sabnzbd:
+    image: lscr.io/linuxserver/sabnzbd:latest
+    container_name: sabnzbd
+    restart: unless-stopped
+    network_mode: service:gluetun
+    depends_on:
+      gluetun: {condition: service_healthy, restart: true}
+    volumes:
+      - ${DATA_ROOT}:/data
+      - ${CONFIG_ROOT}/sabnzbd:/config
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - UMASK=${UMASK}
+      - TZ=${TIMEZONE}
+
+  unpackerr:
+    <<: *arr
+    image: golift/unpackerr:latest
+    container_name: unpackerr
+    user: ${PUID}:${PGID}
+    environment:
+      - TZ=${TIMEZONE}
+      - UN_SONARR_0_URL=http://sonarr:8989
+      - UN_SONARR_0_API_KEY=${SONARR_API_KEY}
+      - UN_SONARR_0_PATHS_0=/data/torrents/tv
+      - UN_RADARR_0_URL=http://radarr:7878
+      - UN_RADARR_0_API_KEY=${RADARR_API_KEY}
+      - UN_RADARR_0_PATHS_0=/data/torrents/movies
+
+  # ---- Indexers ----
+  prowlarr:
+    <<: *arr
+    image: lscr.io/linuxserver/prowlarr:latest
+    container_name: prowlarr
+    ports: ["9696:9696"]
+    volumes:
+      - ${CONFIG_ROOT}/prowlarr:/config
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TIMEZONE}
+      - PROWLARR__AUTH__APIKEY=${PROWLARR_API_KEY}
+      - PROWLARR__AUTH__METHOD=Forms
+      - PROWLARR__AUTH__REQUIRED=DisabledForLocalAddresses
+
+  flaresolverr:
+    image: ghcr.io/flaresolverr/flaresolverr:latest
+    container_name: flaresolverr
+    restart: unless-stopped
+    networks: [arr]
+    environment:
+      - TZ=${TIMEZONE}
+      - LOG_LEVEL=info
+
+  # ---- Library managers ----
+  sonarr:
+    <<: *arr
+    image: lscr.io/linuxserver/sonarr:latest
+    container_name: sonarr
+    ports: ["8989:8989"]
+    volumes:
+      - ${DATA_ROOT}:/data
+      - ${CONFIG_ROOT}/sonarr:/config
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - UMASK=${UMASK}
+      - TZ=${TIMEZONE}
+      - SONARR__AUTH__APIKEY=${SONARR_API_KEY}
+      - SONARR__AUTH__METHOD=Forms
+      - SONARR__AUTH__REQUIRED=DisabledForLocalAddresses
+
+  radarr:
+    <<: *arr
+    image: lscr.io/linuxserver/radarr:latest
+    container_name: radarr
+    ports: ["7878:7878"]
+    volumes:
+      - ${DATA_ROOT}:/data
+      - ${CONFIG_ROOT}/radarr:/config
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - UMASK=${UMASK}
+      - TZ=${TIMEZONE}
+      - RADARR__AUTH__APIKEY=${RADARR_API_KEY}
+      - RADARR__AUTH__METHOD=Forms
+      - RADARR__AUTH__REQUIRED=DisabledForLocalAddresses
+
+  bazarr:
+    <<: *arr
+    image: lscr.io/linuxserver/bazarr:latest
+    container_name: bazarr
+    ports: ["6767:6767"]
+    volumes:
+      - ${DATA_ROOT}/media:/data/media
+      - ${CONFIG_ROOT}/bazarr:/config
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - UMASK=${UMASK}
+      - TZ=${TIMEZONE}
+
+  # TRaSH Guides quality profiles / custom formats / naming, re-synced daily
+  recyclarr:
+    image: ghcr.io/recyclarr/recyclarr:8
+    container_name: recyclarr
+    restart: unless-stopped
+    networks: [arr]
+    user: ${PUID}:${PGID}
+    volumes:
+      - ${CONFIG_ROOT}/recyclarr:/config
+      - ./recyclarr/recyclarr.yml:/config/configs/arr.yml:ro
+    environment:
+      - TZ=${TIMEZONE}
+      - SONARR_API_KEY=${SONARR_API_KEY}
+      - RADARR_API_KEY=${RADARR_API_KEY}
+
+  # ---- Media server + requests ----
+  jellyfin:
+    <<: *arr
+    image: lscr.io/linuxserver/jellyfin:latest
+    container_name: jellyfin
+    ports: ["8096:8096"]
+    volumes:
+      - ${DATA_ROOT}/media:/data/media
+      - ${CONFIG_ROOT}/jellyfin:/config
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - UMASK=${UMASK}
+      - TZ=${TIMEZONE}
+    # hardware transcoding (Linux): uncomment
+    # devices: [/dev/dri:/dev/dri]
+
+  seerr:
+    image: ghcr.io/seerr-team/seerr:latest
+    container_name: seerr
+    restart: unless-stopped
+    networks: [arr]
+    init: true
+    ports: ["5055:5055"]
+    volumes:
+      - ${CONFIG_ROOT}/seerr:/app/config
+    environment:
+      - TZ=${TIMEZONE}
+
+  # ---- Dashboard ----
+  homepage:
+    image: ghcr.io/gethomepage/homepage:latest
+    container_name: homepage
+    restart: unless-stopped
+    networks: [arr]
+    ports: ["3000:3000"]
+    volumes:
+      - ./homepage:/app/config
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - HOMEPAGE_ALLOWED_HOSTS=${HOST_IP}:3000,localhost:3000
+      - HOMEPAGE_VAR_HOST=${HOST_IP}
+      - HOMEPAGE_VAR_SONARR_KEY=${SONARR_API_KEY}
+      - HOMEPAGE_VAR_RADARR_KEY=${RADARR_API_KEY}
+      - HOMEPAGE_VAR_PROWLARR_KEY=${PROWLARR_API_KEY}
+      - HOMEPAGE_VAR_QBIT_USER=${QBIT_USERNAME}
+      - HOMEPAGE_VAR_QBIT_PASS=${QBIT_PASSWORD}

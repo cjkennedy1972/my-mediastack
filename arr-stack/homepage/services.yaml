@@ -1,0 +1,41 @@
+- Watch & Request:
+    - Jellyfin:
+        href: http://{{HOMEPAGE_VAR_HOST}}:8096
+        icon: jellyfin.png
+        description: Media server
+    - Seerr:
+        href: http://{{HOMEPAGE_VAR_HOST}}:5055
+        icon: jellyseerr.png
+        description: Request movies & shows
+
+- Automation:
+    - Sonarr:
+        href: http://{{HOMEPAGE_VAR_HOST}}:8989
+        icon: sonarr.png
+        description: TV
+        widget: {type: sonarr, url: "http://sonarr:8989", key: "{{HOMEPAGE_VAR_SONARR_KEY}}"}
+    - Radarr:
+        href: http://{{HOMEPAGE_VAR_HOST}}:7878
+        icon: radarr.png
+        description: Movies
+        widget: {type: radarr, url: "http://radarr:7878", key: "{{HOMEPAGE_VAR_RADARR_KEY}}"}
+    - Prowlarr:
+        href: http://{{HOMEPAGE_VAR_HOST}}:9696
+        icon: prowlarr.png
+        description: Indexers
+        widget: {type: prowlarr, url: "http://prowlarr:9696", key: "{{HOMEPAGE_VAR_PROWLARR_KEY}}"}
+    - Bazarr:
+        href: http://{{HOMEPAGE_VAR_HOST}}:6767
+        icon: bazarr.png
+        description: Subtitles
+
+- Downloads (VPN):
+    - qBittorrent:
+        href: http://{{HOMEPAGE_VAR_HOST}}:8200
+        icon: qbittorrent.png
+        description: Torrents
+        widget: {type: qbittorrent, url: "http://gluetun:8200", username: "{{HOMEPAGE_VAR_QBIT_USER}}", password: "{{HOMEPAGE_VAR_QBIT_PASS}}"}
+    - SABnzbd:
+        href: http://{{HOMEPAGE_VAR_HOST}}:8100
+        icon: sabnzbd.png
+        description: Usenet

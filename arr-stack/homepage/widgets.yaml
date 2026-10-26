@@ -1,0 +1,2 @@
+- widgets:
+    - resources: {cpu: true, memory: true, disk: /}
